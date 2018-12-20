@@ -5,9 +5,9 @@
 
 <template>
   <div
-    class="container show-container">
-    <div class="backgroud"/>
-    <div class="container-video">
+    class="video-container show-container">
+    <div class="video-mask"/>
+    <div class="content-video">
       <div class="content show-content">
         <div class="content-title">
           <div class="content-tip">观看广告 免费阅读所有章节</div>
@@ -16,25 +16,22 @@
             class="content-count" ><span>{{ count }}秒</span>后可跳过</div>
           <div
             v-else
-            class="close-ad"
-            @click="closeAd">关闭</div>
+            class="close-video"
+            @click="closeVideo(e, true)">关闭</div>
         </div>
         <div
-          v-if="isShowVideo"
+          v-if="isOriginalVideo"
+          class="video"
           @click="gotoAdUrl">
           <video
             ref="mipVideo"
-            class="video"
+            :poster="poster"
+            :src="videourl"
             muted="true"
-            loop
+            class="video"
             autoplay
             webkit-playsinline
             playsinline
-            layout="responsive"
-            width="640"
-            height="368"
-            poster="https://ecmb.bdimg.com/adtest/cc74e541725b3d1c426927fe556f834e.jpg"
-            src="https://ecmb.bdimg.com/cae-legoup-video-target/bcb262e0-fe62-49e6-9d3f-1649cad66394.mp4"
           />
         </div>
         <div
@@ -46,8 +43,6 @@
           />
           <canvas
             ref="videoCanvas"
-            width="640"
-            height="368"
             class="video-canvas"
             @click="gotoAdUrl"/>
         </div>
@@ -65,23 +60,41 @@ import JSMpeg from './jsmpeg'
 
 const customStorage = MIP.util.customStorage(0)
 const css = MIP.util.css
-const isIframed = MIP.viewer.isIframed
 
-const VIDEOINDEX = 'ad-video'
-const COUNTDOWNINDEX = 5
-const PINZHUANGURL = 'https://www.vivo.com/vivo/nexs/?cid=w-1-baidu_ada-xs'
-const PRETIME = 'ad-time'
-let mipPlayer = null
+const COUNTDOWNINDEX = 10
+const PREDATE = 'ad-time'
+
+const isSF = !window.MIP.standalone
+
+let player = null
 let jSMpegPlayer = null
 let canvas = null
 
-// 由于本次为品专视频广告变现的小流量实验，7月9号需产出效果，
-// 因此本次视频写死在组件内部，正式通过实验以后会与品专设置相关格式，修改升级为通用视频广告模板，本次将无属性参数传如；
-const POSTER = 'https://ecmb.bdimg.com/adtest/cc74e541725b3d1c426927fe556f834e.jpg'
-// const TSURL = 'https://searchvideo.bj.bcebos.com/vivo4.ts'
-const TSURL = 'https://searchvideo.bj.bcebos.com/tsfile%2Fheritage%2Fvideo1.ts'
+let isShouldVideo
 
 export default {
+  props: {
+    videoid: {
+      type: String,
+      default: ''
+    },
+    poster: {
+      type: String,
+      default: ''
+    },
+    videourl: {
+      type: String,
+      default: ''
+    },
+    tsurl: {
+      type: String,
+      default: ''
+    },
+    jumpurl: {
+      type: String,
+      default: ''
+    }
+  },
   data () {
     return {
       isOpening: false,
@@ -92,102 +105,132 @@ export default {
     }
   },
   computed: {
-    isShowVideo: function () {
+    isShow: function () {
+      return this.videourl && this.tsurl && isSF && detector.getMobileSystemVersion() && isShouldVideo
+    },
+    isOriginalVideo: function () {
       return detector.isRenderVideoElement()
     }
   },
   created () {
-    let index = +localStorage.getItem(VIDEOINDEX) + 1
-    alert('是否iframe：' + isIframed + '；页数：' + index)
-    if (+customStorage.get(VIDEOINDEX) + 1 === 2) {
+    if (!this.videourl || !this.tsurl) {
+      return
+    }
+    this.timeExpired()
+    this.initVideoIndex()
+    isShouldVideo = +customStorage.get(this.videoid) === 2 || false
+    if (this.isShow) {
       this.readContainerNoScroll()
     }
   },
   firstInviewCallback () {
-    // 初始化所有的视频内容
-    this.init()
-    this.openVideo()
+    if (this.isShow) {
+      this.creatVideo()
+      this.openVideo()
+    }
   },
   methods: {
-    isShow () {
-      let isShow = isIframed && detector.getMobileSystemVersion() && !this.played && +customStorage.get(VIDEOINDEX) === 2
-      console.log('Version：' + detector.getMobileSystemVersion())
-      console.log('第几次刷新：' + customStorage.get(VIDEOINDEX))
-      console.log('是否已经播放过：' + this.played)
-      return !isShow
-    },
     openVideo () {
       let self = this
-      this.isTimeExpired()
       document.body.addEventListener('touchstart', e => {
-        if (self.isShow()) {
-          self.$element.setAttribute('style', 'display: none !important')
-          self.readContainerScroll()
+        if (!self.forbidClick || self.played) {
           return
         }
-        if (!self.forbidClick) {
-          return
-        }
-        e.preventDefault()
-        self.$element.setAttribute('style', 'display: block !important')
-        if (mipPlayer && self.isShowVideo) {
-          mipPlayer.play()
-          self.startTimer()
-        }
-        if (jSMpegPlayer && !self.isShowVideo) {
-          jSMpegPlayer.on('playing', () => {
-            let event = new Event('playing')
-            self.$element.dispatchEvent(event)
-            css(canvas, {opacity: '1'})
-            // 初始化倒计时器
-            self.startTimer()
-          })
-          jSMpegPlayer.play()
-        }
-        setTimeout(() => {
-          self.forbidClick = false
-        }, 500)
+        e && e.preventDefault()
+        self.startPlayer()
       }, false)
     },
-    init () {
+    startPlayer () {
       let self = this
-      // 在非ios手百下使用JSMpeg兼容各种机型的视频自动播放
-      if (this.isShowVideo) {
-        // 初始化播放次数
-        this.initVideoIndex()
-        mipPlayer = this.$element.querySelector('video')
-        if (mipPlayer) {
-          mipPlayer.pause()
-        }
+      this.$element.setAttribute('style', 'display: block !important')
+      let forceClose = setTimeout(() => {
+        self.closeVideo()
+      }, 15000)
+      if (player && this.isOriginalVideo) {
+        player.addEventListener('playing', () => {
+          self.startTimer()
+          clearTimeout(forceClose)
+        })
+        player.play()
+      }
+      if (jSMpegPlayer && !this.isOriginalVideo) {
+        jSMpegPlayer.on('playing', () => {
+          let event = new Event('playing')
+          this.$element.dispatchEvent(event)
+          css(canvas, {opacity: '1'})
+          self.startTimer()
+          clearTimeout(forceClose)
+        })
+        jSMpegPlayer.play()
+      }
+      /* global _hmt */
+      _hmt && _hmt.push(['_trackEvent', 'video', 'show', this.videoid])
+      this.noVideoMaskScroll()
+      setTimeout(() => {
+        self.forbidClick = false
+      }, 500)
+    },
+    noVideoMaskScroll () {
+      let videoMask = this.$element.querySelector('.video-mask')
+      videoMask.addEventListener('touchmove', e => {
+        e && e.preventDefault()
+        e && e.stopPropagation()
+        e && e.stopImmediatePropagation()
+        return false
+      })
+      videoMask.addEventListener('scroll', e => {
+        e && e.preventDefault()
+        e && e.stopPropagation()
+        e && e.stopImmediatePropagation()
+        return false
+      })
+    },
+    creatVideo () {
+      if (this.isOriginalVideo) {
+        this.initVideo()
       } else {
-        self.initVideo()
-        self.initVideoIndex()
+        this.initCanvasVideo()
       }
     },
     initVideo () {
+      player = this.$element.querySelector('video')
+      if (player) {
+        player.pause()
+        player.addEventListener('ended', () => {
+          this.closeVideo()
+        })
+      }
+    },
+    initCanvasVideo () {
+      let self = this
       let videoCover = this.$refs.videoCover
       if (videoCover) {
-        css(videoCover, {backgroundImage: 'url(' + POSTER + ')'})
+        css(videoCover, {backgroundImage: 'url(' + this.poster + ')'})
         canvas = this.$refs.videoCanvas
         let attributes = {
           class: 'video',
           loop: false,
           audio: false,
-          poster: POSTER,
+          poster: this.poster,
           canvas: canvas
         }
-        let tsUrl = TSURL
-        jSMpegPlayer = new JSMpeg.Player(tsUrl, attributes)
+        let tsurl = this.tsurl
+        jSMpegPlayer = new JSMpeg.Player(tsurl, attributes)
         jSMpegPlayer.pause()
+        jSMpegPlayer.on('ended', () => {
+          let event = new Event('ended')
+          this.$element.dispatchEvent(event)
+          self.closeVideo()
+        })
       }
     },
     initVideoIndex () {
-      let videoIndex = customStorage.get(VIDEOINDEX)
+      let videoIndex = customStorage.get(this.videoid)
       if (videoIndex == null) {
-        customStorage.set(VIDEOINDEX, 1)
+        customStorage.set(this.videoid, 1)
       } else {
         videoIndex++
-        customStorage.set(VIDEOINDEX, videoIndex)
+        customStorage.set(this.videoid, videoIndex)
       }
     },
     readContainerNoScroll () {
@@ -217,62 +260,53 @@ export default {
         this.forbidClick = true
         this.played = true
         this.$element.setAttribute('style', 'display: none !important')
-        window.top.location.href = PINZHUANGURL
+        window.top.location.href = this.jumpurl
+        /* global _hmt */
+        _hmt && _hmt.push(['_trackEvent', 'video', 'click', this.videoid])
       }
     },
-    closeAd (e) {
-      e.stopPropagation()
-      e.preventDefault()
-      let self = this
-      let container = this.$element.querySelector('.container')
+    closeVideo (e, isClick) {
+      e && e.stopPropagation()
+      e && e.preventDefault()
+      let container = this.$element.querySelector('.video-container')
       let content = this.$element.querySelector('.content')
       let isClosed = false
-      if (mipPlayer) {
-        mipPlayer.pause()
+      if (player) {
+        player.pause()
       }
       if (jSMpegPlayer) {
-        css(canvas, {opacity: '0'})
-        jSMpegPlayer.stop()
+        jSMpegPlayer.pause()
       }
       if (!isClosed) {
-        self.readContainerScroll()
-        self.forbidClick = true
-        self.played = true
+        this.readContainerScroll()
+        this.forbidClick = true
+        this.played = true
         container.classList.add('close-container')
+        let self = this
         setTimeout(() => {
           content.classList.add('close-content')
+          /* global _hmt */
+          isClick && _hmt && _hmt.push(['_trackEvent', 'close', 'click', this.videoid])
           setTimeout(() => {
             self.$element.setAttribute('style', 'display: none !important')
             container.classList.remove('close-container')
             content.classList.remove('close-content')
-          }, 300)
+          }, 200)
         }, 100)
       }
       isClosed = true
     },
-    isTimeExpired () {
-      let myDate = new Date()
-      let preTime = customStorage.get(PRETIME)
-      if (preTime == null) {
-        customStorage.set(PRETIME, myDate.getTime())
-        return true
+    timeExpired () {
+      let myDate = new Date().getDate()
+      let preDate = customStorage.get(PREDATE)
+      if (preDate == null) {
+        customStorage.set(PREDATE, myDate)
+        return
       }
-      let currentTime = myDate.getTime()
-      let diffTime = currentTime - preTime
-      // 相差天数
-      // let dayDiff = Math.floor(diffTime / (24 * 3600 * 1000))
-      // 相差小时数
-      let hours = diffTime % (24 * 3600 * 1000) // 计算天数后剩余的毫秒数
-      // 相差分钟数
-      let minutes = hours % (3600 * 1000) // 计算小时数后剩余的毫秒数
-      // 相差秒数
-      let seconds = minutes % (60 * 1000) // 计算分钟数后剩余的毫秒数
-      let secondsDiff = Math.round(seconds / 1000)
-      // 此处测试完毕会修改成一天一清
-      if (secondsDiff >= 30) {
-      // if (dayDiff >= 1) {
-        alert('清空')
-        customStorage.clear()
+      let currentDate = myDate
+      if (currentDate !== +preDate) {
+        customStorage.rm(this.videoid)
+        customStorage.rm(PREDATE)
       }
     }
   }
@@ -289,16 +323,21 @@ mip-novel-video {
   color: #fff;
   display: none !important;
   font-size: 14px;
+  left: 0;
+  top: 0;
+
   span {
     color: #ff6767;
   }
-  .container {
+
+  .video-container {
     height: 100%;
     width: 100%;
     position: absolute;
     z-index: 100;
     opacity: 0;
   }
+
   .close-container {
     animation: close 500ms ease;
     -webkit-animation: close 500ms ease;
@@ -306,27 +345,27 @@ mip-novel-video {
     -webkit-animation-fill-mode: forwards;
   }
 
-  @keyframes close
-  {
+  @keyframes close {
     from {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
+
     to {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
   }
 
-  @-webkit-keyframes close
-  {
+  @-webkit-keyframes close {
     from {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
+
     to {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
   }
 
@@ -335,66 +374,73 @@ mip-novel-video {
     -webkit-animation: show 500ms ease;
     animation-fill-mode: forwards;
     -webkit-animation-fill-mode: forwards;
-    opacity: 1
+    opacity: 1;
   }
+
   .show-content {
     animation: showScale 500ms ease;
     -webkit-animation: showScale 500ms ease;
     animation-fill-mode: forwards;
     -webkit-animation-fill-mode: forwards;
-    opacity: 1
+    opacity: 1;
   }
-  @keyframes showScale
-  {
+
+  @keyframes showScale {
     from {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
+
     to {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
   }
-  @-webkit-keyframes showScale
-  {
+
+  @-webkit-keyframes showScale {
     from {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
+
     to {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
   }
+
   .close-content {
     animation: closeScale 500ms ease;
     -webkit-animation: closeScale 500ms ease;
     animation-fill-mode: forwards;
     -webkit-animation-fill-mode: forwards;
   }
-  @keyframes closeScale
-  {
+
+  @keyframes closeScale {
     from {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
+
     to {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
   }
-  @-webkit-keyframes closeScale
-  {
+
+  @-webkit-keyframes closeScale {
     from {
       transform: scale3d(1, 1, 1);
-      opacity: 1
+      opacity: 1;
     }
+
     to {
       transform: scale3d(0, 0, 0);
-      opacity: 0
+      opacity: 0;
     }
   }
-  .backgroud {
+
+  .video-mask {
     width: 100%;
     height: 100%;
     z-index: 998;
@@ -403,47 +449,58 @@ mip-novel-video {
     position: absolute;
     left: 0;
   }
-  .container-video {
+
+  .content-video {
     width: 100%;
     height: 100%;
     z-index: 999;
     left: 0;
     position: absolute;
     display: -webkit-flex;
-    display:         flex;
+    display: flex;
     -webkit-align-items: center;
-            align-items: center;
+    align-items: center;
     -webkit-justify-content: center;
-            justify-content: center;
+    justify-content: center;
   }
+
   .content {
     width: 95%;
-    height: 56vw;
+    height: 53.5vw;
     z-index: 1000;
     position: relative;
+
     &-title {
       width: 100%;
       height: 50px;
       line-height: 40px;
+
+      /* stylelint-disable function-linear-gradient-no-nonstandard-direction */
       background: -webkit-linear-gradient(top, rgba(0, 0, 0, 1), transparent);
-      background:         linear-gradient(top, rgba(0, 0, 0, 1), transparent);
+      background: linear-gradient(top, rgba(0, 0, 0, 1), transparent);
+      /* stylelint-enable function-linear-gradient-no-nonstandard-direction */
+
       position: absolute;
       z-index: 1001;
       display: flex;
       justify-content: space-between;
     }
+
     &-count {
       margin-right: 10px;
     }
+
     &-tip {
       margin-left: 10px;
     }
   }
-  .close-ad {
+
+  .close-video {
     padding-right: 10px;
     width: 100px;
     text-align: right;
   }
+
   .pinpai {
     width: 54px;
     height: 23px;
@@ -453,14 +510,16 @@ mip-novel-video {
     align-items: center;
     justify-content: center;
   }
+
   .pinpai-back {
     width: 100%;
     height: 100%;
     position: absolute;
     background-color: #666;
-    opacity: .75;
+    opacity: 0.75;
     bottom: 0;
   }
+
   .pinpai-title {
     width: 100%;
     height: 100%;
@@ -470,43 +529,48 @@ mip-novel-video {
     align-items: center;
     justify-content: center;
     text-align: center;
+    position: absolute;
   }
+
   .video {
     position: relative;
     width: 100%;
-    height: 56.5vw;
+    height: 100%;
+    overflow: hidden;
   }
 
-  @keyframes show
-  {
+  @keyframes show {
     from {
-      opacity: 0
+      opacity: 0;
     }
+
     to {
-      opacity: 1
+      opacity: 1;
     }
   }
 
-  @-webkit-keyframes show
-  {
+  @-webkit-keyframes show {
     from {
-      opacity: 0
+      opacity: 0;
     }
+
     to {
-      opacity: 1
+      opacity: 1;
     }
   }
+
   .video-cover {
     background-size: cover;
     height: 100%;
     width: 100%;
     position: absolute;
   }
+
   .video-canvas {
     position: absolute;
     opacity: 0;
     width: 100%;
+    height: 100%;
   }
 }
-
 </style>

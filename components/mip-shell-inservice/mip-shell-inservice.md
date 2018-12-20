@@ -3,9 +3,17 @@
 ## 说明
 极速服务 mip-shell定制化
 
+标题|内容
+----|----
+类型|通用
+支持布局|N/S
+所需脚本|https://c.mipcdn.com/static/v2/mip-shell-inservice/mip-shell-inservice.js
+
+
+
 ## 示例
 ```html
-<mip-shell-is mip-shell>
+<mip-shell-inservice mip-shell>
     <script type="application/json">
         {
         "routes": [
@@ -21,7 +29,7 @@
                 }
             },
             {
-                "pattern": "./mip-shell-is.html",
+                "pattern": "./mip-shell-inservice.html",
                 "meta": {
                     "header": {
                         "show": true,
@@ -44,7 +52,7 @@
         "isId":"156786663788884"
     }
     </script>
-</mip-shell-is>
+</mip-shell-inservice>
 ```
 
 ## 属性
@@ -56,4 +64,4 @@
 示例："123456678"
 
 ### routes 
-[参考mip-shell用法](https://github.com/mipengine/mip2/blob/master/docs/page/shell.md)
+[参考mip-shell用法](https://github.com/mipengine/mip2/blob/master/docs/new-doc/all-sites-mip/5-mip-shell.md)
