@@ -147,8 +147,20 @@ export default class Scroll {
       if (xhr.readyState === 4 && xhr.status === 200) {
         clearTimeout(weakTimer) // 获取成功，清除弱网机制
 
+        let result = xhr.responseText
+
+        // jsonld 的script 标签提取
+        let jsonldPart = result.slice(result.indexOf('<script type="application/ld+json">'))
+        jsonldPart = jsonldPart.slice(0, jsonldPart.indexOf('</script>') + 9)
+
+        // mip-reader-wrapper div标签内容提取
+        let readerWrapperPart = result.slice(
+          result.indexOf('<div id="mip-reader-warp">'),
+          result.indexOf('<div class="navigator">')
+        )
+
         // 处理数据
-        divMidContainer.innerHTML = xhr.responseText
+        divMidContainer.innerHTML = jsonldPart + readerWrapperPart
 
         // 去除hash
         let pageId = getCacheUrl(url.replace(/#.*$/, ''))
